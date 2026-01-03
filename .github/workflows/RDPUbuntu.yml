@@ -1,75 +1,74 @@
-name: RDP Ubuntu Fixed DBUS
+name: secure-rdp-ubuntu
 
 on:
   workflow_dispatch:
 
 jobs:
-  secure-rdp-ubuntu:
+  ubuntu-rdp:
     runs-on: ubuntu-latest
     timeout-minutes: 360
-    
+
     steps:
-      - name: Update & Install Desktop Environment (XFCE) & XRDP
+      - name: Update system
         run: |
-          sudo apt-get update
-          
-          # PERBAIKAN 1: Tambahkan dbus-x11 dan x11-xserver-utils
-          sudo apt-get install -y xfce4 xfce4-goodies xrdp dbus-x11 x11-xserver-utils
-          
-          # PERBAIKAN 2: Reset konfigurasi startwm.sh agar kompatibel dengan D-Bus
-          # Kita backup dulu file aslinya
-          sudo cp /etc/xrdp/startwm.sh /etc/xrdp/startwm.sh.bak
-          
-          # Kita tulis ulang startwm.sh dengan konfigurasi yang lebih stabil
-          sudo bash -c "cat > /etc/xrdp/startwm.sh" <<EOF
-          #!/bin/sh
-          unset DBUS_SESSION_BUS_ADDRESS
-          unset XDG_RUNTIME_DIR
-          . /etc/X11/Xsession
-          EOF
-          
-          sudo chmod +x /etc/xrdp/startwm.sh
-          
-          # Start layanan XRDP
+          sudo apt update
+
+      - name: Install XFCE, XRDP, Xorg
+        run: |
+          sudo apt install -y \
+            xfce4 xfce4-goodies \
+            xrdp xorgxrdp dbus-x11
+
+      - name: Configure XRDP session
+        run: |
+          echo "startxfce4" | sudo tee /etc/skel/.xsession
+          sudo sed -i.bak '/^test -x \/etc\/X11\/Xsession && exec \/etc\/X11\/Xsession$/c\startxfce4' /etc/xrdp/startwm.sh
+
+      - name: Enable and restart XRDP
+        run: |
           sudo systemctl enable xrdp
-          sudo systemctl start xrdp
+          sudo systemctl restart xrdp
+          sudo systemctl restart xrdp-sesman
 
-      - name: Create RDP User with Secure Password
+      - name: Create RDP user
+        id: user
         run: |
-          PASSWORD=$(openssl rand -base64 16)
-          USER="rdpuser"
-          
-          sudo useradd -m -s /bin/bash $USER
-          echo "$USER:$PASSWORD" | sudo chpasswd
-          sudo usermod -aG sudo $USER
-          
-          # PERBAIKAN 3: Gunakan startxfce4 di .xsession
-          echo "startxfce4" | sudo tee /home/$USER/.xsession
-          sudo chown $USER:$USER /home/$USER/.xsession
+          USER=rdp
+          PASS=$(openssl rand -base64 16)
 
-          # Simpan variabel untuk step selanjutnya
+          sudo adduser --disabled-password --gecos "" $USER
+          echo "$USER:$PASS" | sudo chpasswd
+          sudo usermod -aG sudo $USER
+
           echo "RDP_USER=$USER" >> $GITHUB_ENV
-          echo "RDP_PASS=$PASSWORD" >> $GITHUB_ENV
+          echo "RDP_PASS=$PASS" >> $GITHUB_ENV
 
       - name: Install Tailscale
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
 
-      - name: Establish Tailscale Connection
+      - name: Start Tailscale
         run: |
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-ubuntu-$GITHUB_RUN_ID
-          TS_IP=$(tailscale ip -4)
-          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+          sudo tailscale up \
+            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} \
+            --hostname=gh-ubuntu-${{ github.run_id }}
 
-      - name: Maintain Connection
+      - name: Get Tailscale IP
         run: |
-          echo "=========================================="
-          echo "           RDP ACCESS DETAILS             "
-          echo "=========================================="
-          echo "OS       : Ubuntu (XFCE Desktop)"
-          echo "Address  : $TAILSCALE_IP"
-          echo "Username : $RDP_USER"
-          echo "Password : $RDP_PASS"
-          echo "=========================================="
-          echo "RDP Active. Tekan Cancel Workflow untuk berhenti."
-          sleep infinity
+          IP=$(tailscale ip -4 | head -n1)
+          echo "TAILSCALE_IP=$IP" >> $GITHUB_ENV
+
+      - name: RDP Access Info
+        run: |
+          echo "===================================="
+          echo " RDP ACCESS READY "
+          echo "------------------------------------"
+          echo " OS       : Ubuntu (XFCE)"
+          echo " Address  : $TAILSCALE_IP"
+          echo " Username : $RDP_USER"
+          echo " Password : $RDP_PASS"
+          echo "===================================="
+
+      - name: Keep Runner Alive
+        run: |
+          while true; do sleep 300; done
