@@ -1,0 +1,63 @@
+name: RDP Ubuntu Fixed
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp-ubuntu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    steps:
+      - name: Update & Install Desktop Environment (XFCE) & XRDP
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xfce4 xfce4-goodies xrdp
+          sudo sed -i.bak '/fi/a #xrdp multiple-users configuration \n xfce4-session \n' /etc/xrdp/startwm.sh
+          sudo systemctl enable xrdp
+          sudo systemctl start xrdp
+
+      - name: Create RDP User with Secure Password
+        run: |
+          PASSWORD=$(openssl rand -base64 16)
+          USER="rdpuser"
+          
+          sudo useradd -m -s /bin/bash $USER
+          echo "$USER:$PASSWORD" | sudo chpasswd
+          sudo usermod -aG sudo $USER
+          echo "xfce4-session" | sudo tee /home/$USER/.xsession
+          sudo chown $USER:$USER /home/$USER/.xsession
+
+          # PERBAIKAN DI SINI (Menggunakan $GITHUB_ENV bukan $env:GITHUB_ENV)
+          echo "RDP_USER=$USER" >> $GITHUB_ENV
+          echo "RDP_PASS=$PASSWORD" >> $GITHUB_ENV
+
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+
+      - name: Establish Tailscale Connection
+        run: |
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-ubuntu-$GITHUB_RUN_ID
+          
+          TS_IP=$(tailscale ip -4)
+          
+          # PERBAIKAN DI SINI
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+
+      - name: Maintain Connection
+        run: |
+          echo "=========================================="
+          echo "           RDP ACCESS DETAILS             "
+          echo "=========================================="
+          echo "OS       : Ubuntu (XFCE Desktop)"
+          
+          # PERBAIKAN DI SINI (Cara panggil variabel di Bash pakai $)
+          echo "Address  : $TAILSCALE_IP"
+          echo "Username : $RDP_USER"
+          echo "Password : $RDP_PASS"
+          
+          echo "=========================================="
+          echo "RDP Active. Tekan Cancel Workflow untuk berhenti."
+          
+          sleep infinity
